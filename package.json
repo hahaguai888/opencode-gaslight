@@ -1,6 +1,6 @@
 {
   "name": "opencode-gaslight",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "OpenCode TUI plugin to edit assistant responses and thinking in-place, rewriting session history for future context",
   "type": "module",
   "exports": {

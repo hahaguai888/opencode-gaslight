@@ -9,6 +9,15 @@ Gaslight your AI agent! Modify the session history to make it think it already a
 
 OpenCode Gaslight is a TUI plugin that lets you edit assistant responses and thinking in the session history, so future messages see the corrected version as prior context.
 
+## Changes in this fork
+
+This fork modifies the upstream plugin for keyboard environments where **arrow keys and Tab are not delivered** (common with certain terminals / IME combinations):
+
+- **No Tab-based editor.** The tabbed response/thinking editor is removed. Each response and its thinking are listed as separate entries in the picker, and every edit opens a simple prompt dialog (Enter saves, Esc cancels).
+- **Type-to-filter navigation.** In the picker, type a number (e.g. `88`) to filter `Response #88`, then press Enter — no arrow keys required.
+- **New `/gasdel` command** (alias `/gaslight-delete`): permanently deletes an assistant message and all its parts from the session, with a confirmation dialog.
+- **Real error reporting.** Part updates check the API result; failures now surface the actual server error instead of showing a false success toast.
+
 ## Install
 
 ```bash
@@ -40,7 +49,15 @@ In any active session:
 /gaslight
 ```
 
-Select the response to edit (most recent is pre-selected). If the response includes thinking/reasoning, use **Tab** to switch between editing the response and the thinking. **Enter** saves, **Esc** cancels.
+Pick what to edit (most recent is pre-selected). Responses and thinking are separate entries: `Response #N` and `Thinking #N`. Type a number in the search box to filter, press **Enter** to open the editor, edit the text, then **Enter** saves, **Esc** cancels.
+
+To delete an entire assistant message:
+
+```
+/gasdel
+```
+
+Filter with a number, **Enter** to select, then confirm. Deletion is permanent.
 
 ## Why
 
