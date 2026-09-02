@@ -1,7 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
-import { appendFileSync } from "node:fs"
-import { homedir } from "node:os"
 
 type EditablePart = { type: "text" | "reasoning"; text: string; id: string }
 
@@ -11,48 +9,28 @@ function truncate(text: string, max: number): string {
   return oneline.slice(0, max - 1) + "…"
 }
 
-function dbg(msg: string) {
-  try {
-    appendFileSync(
-      homedir() + "/.local/share/opencode/gaslight-debug.log",
-      `[${new Date().toISOString()}] ${msg}\n`,
-    )
-  } catch {}
-}
-
 function errText(e: unknown): string {
   const anyE = e as { data?: { message?: string }; message?: string }
   return anyE?.data?.message || anyE?.message || JSON.stringify(e)
 }
 
 const tui: TuiPlugin = async (api) => {
-  api.renderer.keyInput.on("keypress", (evt: any) => {
-    dbg(`key: name=${evt.name} ctrl=${evt.ctrl} meta=${evt.meta} shift=${evt.shift}`)
-  })
-
-  api.command.register(() => [
+  const runGaslight = async () => {
     {
-      title: "Gaslight",
-      value: "plugin.gaslight",
-      description: "Edit an assistant response or thinking in this session",
-      category: "Session",
-      slash: { name: "gaslight" },
-      enabled: api.route.current.name === "session",
-      onSelect: async () => {
-        const route = api.route.current
-        if (route.name !== "session") {
-          api.ui.toast({ message: "No active session", variant: "error" })
-          return
-        }
+      const route = api.route.current
+      if (route.name !== "session") {
+        api.ui.toast({ message: "No active session", variant: "error" })
+        return
+      }
 
-        const sessionID = route.params.sessionID
-        const messages = api.state.session.messages(sessionID)
-        const assistantMsgs = messages.filter((m) => m.role === "assistant")
+      const sessionID = route.params.sessionID
+      const messages = api.state.session.messages(sessionID)
+      const assistantMsgs = messages.filter((m) => m.role === "assistant")
 
-        if (assistantMsgs.length === 0) {
-          api.ui.toast({ message: "No assistant messages found", variant: "error" })
-          return
-        }
+      if (assistantMsgs.length === 0) {
+        api.ui.toast({ message: "No assistant messages found", variant: "error" })
+        return
+      }
 
         const options: {
           title: string
@@ -97,9 +75,6 @@ const tui: TuiPlugin = async (api) => {
           return
         }
 
-        dbg(
-          `picker: msgs=${assistantMsgs.length} options=${options.length}`,
-        )
 
         if (options.length === 1) {
           openEditor(sessionID, options[0].value)
@@ -117,36 +92,30 @@ const tui: TuiPlugin = async (api) => {
               options,
               current: `text:${lastMsgId}`,
               onSelect: (option) => {
-                dbg(`picker onSelect: title=${option.title} value=${option.value}`)
                 openEditor(sessionID, option.value as string)
               },
             }),
           () => {},
         )
-      },
-    },
+    }
+  }
+
+  const runGasdel = async () => {
     {
-      title: "Gaslight Delete",
-      value: "plugin.gaslight-delete",
-      description: "Delete an assistant response from this session",
-      category: "Session",
-      slash: { name: "gasdel", aliases: ["gaslight-delete"] },
-      enabled: api.route.current.name === "session",
-      onSelect: async () => {
-        const route = api.route.current
-        if (route.name !== "session") {
-          api.ui.toast({ message: "No active session", variant: "error" })
-          return
-        }
+      const route = api.route.current
+      if (route.name !== "session") {
+        api.ui.toast({ message: "No active session", variant: "error" })
+        return
+      }
 
-        const sessionID = route.params.sessionID
-        const messages = api.state.session.messages(sessionID)
-        const assistantMsgs = messages.filter((m) => m.role === "assistant")
+      const sessionID = route.params.sessionID
+      const messages = api.state.session.messages(sessionID)
+      const assistantMsgs = messages.filter((m) => m.role === "assistant")
 
-        if (assistantMsgs.length === 0) {
-          api.ui.toast({ message: "No assistant messages found", variant: "error" })
-          return
-        }
+      if (assistantMsgs.length === 0) {
+        api.ui.toast({ message: "No assistant messages found", variant: "error" })
+        return
+      }
 
         const options = assistantMsgs
           .map((msg, idx) => {
@@ -183,7 +152,6 @@ const tui: TuiPlugin = async (api) => {
 
         const lastMsgId = assistantMsgs[assistantMsgs.length - 1].id
 
-        dbg(`delete picker: msgs=${assistantMsgs.length} options=${options.length}`)
 
         api.ui.dialog.setSize("large")
         api.ui.dialog.replace(
@@ -194,15 +162,41 @@ const tui: TuiPlugin = async (api) => {
               options,
               current: lastMsgId,
               onSelect: (option) => {
-                dbg(`delete onSelect: title=${option.title} value=${option.value}`)
                 confirmDelete(sessionID, option.value as string)
               },
             }),
           () => {},
         )
+    }
+  }
+
+  // Register via modern keymap API: enabled must be a FUNCTION so it is
+  // re-evaluated dynamically (legacy api.command.register freezes the value).
+  api.keymap.registerLayer({
+    commands: [
+      {
+        name: "plugin.gaslight",
+        title: "Gaslight",
+        desc: "Edit an assistant response or thinking in this session",
+        category: "Session",
+        namespace: "palette",
+        slashName: "gaslight",
+        enabled: () => api.route.current.name === "session",
+        run: () => runGaslight(),
       },
-    },
-  ])
+      {
+        name: "plugin.gaslight-delete",
+        title: "Gaslight Delete",
+        desc: "Delete an assistant response from this session",
+        category: "Session",
+        namespace: "palette",
+        slashName: "gasdel",
+        slashAliases: ["gaslight-delete"],
+        enabled: () => api.route.current.name === "session",
+        run: () => runGasdel(),
+      },
+    ],
+  })
 
   // ── Open single-field editor for response or thinking ──────────────
 
@@ -212,7 +206,6 @@ const tui: TuiPlugin = async (api) => {
     const messages = api.state.session.messages(sessionID)
     const message = messages.find((m) => m.id === messageID)
     if (!message) {
-      dbg(`openEditor: message NOT found ${messageID}`)
       api.ui.toast({ message: "Message not found", variant: "error" })
       return
     }
@@ -225,9 +218,6 @@ const tui: TuiPlugin = async (api) => {
     ) as EditablePart[]
     const usable = targetParts.filter((p) => p.text.trim().length > 0)
 
-    dbg(
-      `openEditor: kind=${kind} msg=${messageID} parts=${targetParts.length} usable=${usable.length}`,
-    )
 
     if (usable.length === 0) {
       api.ui.toast({ message: "No editable content", variant: "error" })
@@ -246,7 +236,6 @@ const tui: TuiPlugin = async (api) => {
           placeholder: `Enter corrected ${label.toLowerCase()}`,
           onConfirm: async (newText: string) => {
             api.ui.dialog.clear()
-            dbg(`prompt onConfirm: len=${newText.length} same=${newText === originalText}`)
             if (newText === originalText) {
               api.ui.toast({ message: "No changes made", variant: "info" })
               return

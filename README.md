@@ -1,84 +1,110 @@
-# opencode-gaslight
+# opencode-gaslight (fixed fork)
 
-[![npm version](https://img.shields.io/npm/v/opencode-gaslight.svg)](https://www.npmjs.com/package/opencode-gaslight)
-[![npm downloads](https://img.shields.io/npm/dm/opencode-gaslight.svg)](https://www.npmjs.com/package/opencode-gaslight)
-[![license](https://img.shields.io/npm/l/opencode-gaslight.svg)](./LICENSE)
+Gaslight your AI agent! Edit assistant responses and thinking in the session
+history, so future messages see the corrected version as prior context.
 
+Fork of [Adamkadaban/opencode-gaslight](https://github.com/Adamkadaban/opencode-gaslight)
+with keyboard-friendly UX (no arrow keys / Tab needed) plus a critical fix for
+**opencode >= 1.18.25**.
 
-Gaslight your AI agent! Modify the session history to make it think it already approved of your request. Particularly useful for security research<sup>[1](#why)</sup>
+## The bug this fork fixes
 
-OpenCode Gaslight is a TUI plugin that lets you edit assistant responses and thinking in the session history, so future messages see the corrected version as prior context.
+In opencode 1.18.x the legacy `api.command.register()` shim freezes the
+`enabled` flag at plugin-load time. This plugin sets
+`enabled: api.route.current.name === "session"`, which evaluates to `false`
+while the TUI boots on the home route — so `/gaslight` and `/gasdel` were
+**permanently invisible**, even inside sessions ("No matching items").
 
-## Changes in this fork
+The fix registers commands through the modern keymap API, where `enabled` is
+a **function** re-evaluated on the fly:
 
-This fork modifies the upstream plugin for keyboard environments where **arrow keys and Tab are not delivered** (common with certain terminals / IME combinations):
+```ts
+api.keymap.registerLayer({
+  commands: [
+    {
+      name: "plugin.gaslight",
+      title: "Gaslight",
+      namespace: "palette",
+      slashName: "gaslight",
+      enabled: () => api.route.current.name === "session", // dynamic!
+      run: () => runGaslight(),
+    },
+    // ...gasdel
+  ],
+})
+```
 
-- **No Tab-based editor.** The tabbed response/thinking editor is removed. Each response and its thinking are listed as separate entries in the picker, and every edit opens a simple prompt dialog (Enter saves, Esc cancels).
-- **Type-to-filter navigation.** In the picker, type a number (e.g. `88`) to filter `Response #88`, then press Enter — no arrow keys required.
-- **New `/gasdel` command** (alias `/gaslight-delete`): permanently deletes an assistant message and all its parts from the session, with a confirmation dialog.
-- **Real error reporting.** Part updates check the API result; failures now surface the actual server error instead of showing a false success toast.
+The plugin is also loaded from a local directory (`file://` spec) instead of
+the npm package, because the npm `opencode-gaslight@0.1.1` is the *upstream*
+version without `/gasdel` and the arrow-free UX.
 
-## Install
+## Requirements
+
+- opencode >= 1.18.x (TUI plugin support)
+- [bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`)
+- git
+
+## Install (one command)
 
 ```bash
-opencode plugin opencode-gaslight -g
+curl -fsSL https://raw.githubusercontent.com/hahaguai888/opencode-gaslight/main/install.sh | bash
 ```
 
-This installs the package globally and updates your `tui.json` automatically.
-
-Or manually:
+Or clone first and inspect it yourself (recommended):
 
 ```bash
-npm install -g opencode-gaslight
+git clone https://github.com/hahaguai888/opencode-gaslight.git
+cd opencode-gaslight
+bash install.sh
 ```
 
-Then add to your `tui.json`:
+The script:
 
-```json
-{
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["opencode-gaslight"]
-}
-```
+1. Clones this repo to `~/.local/share/opencode-gaslight` (or `git pull` if present)
+2. Runs `bun install` for the plugin's dependencies
+3. Adds `"file://$HOME/.local/share/opencode-gaslight"` to
+   `~/.config/opencode/tui.json` (idempotent — safe to re-run)
 
 ## Usage
 
-In any active session:
+Restart opencode, **open a session** (the commands are session-only, they won't
+show on the home screen), then:
 
+- `/gaslight` — edit a previous assistant response or its thinking.
+  Type a number (e.g. `88`) to filter `Response #88`, press **Enter**, edit
+  the text, **Enter** saves / **Esc** cancels.
+- `/gasdel` (alias `/gaslight-delete`) — permanently delete an assistant
+  message from the session, with a confirmation dialog.
+
+If the session has exactly one editable response, the editor opens directly.
+
+## Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hahaguai888/opencode-gaslight/main/uninstall.sh | bash
 ```
-/gaslight
-```
 
-Pick what to edit (most recent is pre-selected). Responses and thinking are separate entries: `Response #N` and `Thinking #N`. Type a number in the search box to filter, press **Enter** to open the editor, edit the text, then **Enter** saves, **Esc** cancels.
+## Troubleshooting
 
-To delete an entire assistant message:
-
-```
-/gasdel
-```
-
-Filter with a number, **Enter** to select, then confirm. Deletion is permanent.
+- **Commands don't show up:** make sure you are *inside a session* (not on the
+  home screen), and that you restarted opencode after installing.
+- **`bun: command not found`:** install bun, restart your shell, re-run
+  `install.sh`.
+- **After a `git pull`:** re-run `bash install.sh` — it will pull and refresh
+  `node_modules` and the tui.json entry.
+- **Verify it loaded:** `opencode debug config | grep -A5 plugin` should show
+  the `file://...opencode-gaslight` spec.
 
 ## Why
 
-<a name="why"><sup>1</sup></a> LLMs weight their own prior responses heavily when generating subsequent outputs. Research on multi-turn interactions shows that once a model commits to a position - whether to comply or refuse - it tends to maintain that position in follow-up messages. This is sometimes called **refusal momentum**: a single erroneous safety refusal early in a conversation conditions the model to keep refusing, even when the task is legitimate.
-
-This is a real problem for security researchers. If you're using an LLM to help triage a vulnerability, reproduce a bug, or analyze an exploit, a false-positive refusal can make the entire session unusable. The model won't reconsider - it trusts its own prior "no" more than your explanation of why the work is authorized.
-
-`/gaslight` fixes this by letting you edit the prior response directly. Once the context window shows the model already agreed to help, it continues helping. You don't lose your accumulated context, and you don't waste time re-prompting.
-
-## Background reading
-
-The self-consistency effect is well-documented:
-
-- **Crescendo attack** - Russinovich, Salem & Eldan (Microsoft, USENIX Security 2025) showed that referencing a model's own prior replies progressively leads to compliance, achieving 29-71% higher success than single-turn techniques. The inverse is the refusal momentum problem. ([arXiv:2404.01833](https://arxiv.org/abs/2404.01833))
-
-- **Persuasion taxonomy** - Zeng et al. (2024) applied the *commitment and consistency* principle from social psychology to LLMs: once a model commits to a position, it maintains it - same as the well-documented human cognitive bias. >92% attack success rate on GPT-4 and Llama 2. ([arXiv:2401.06373](https://arxiv.org/abs/2401.06373))
-
-- **Chain-of-Verification** - Dhuliawala et al. (2023) found that "the initial [incorrect] response is still in the context and can be attended to during the new generation," confirming models are biased toward self-consistency with their prior outputs even when wrong. ([summary](https://lilianweng.github.io/posts/2024-07-07-hallucination/))
-
-- **PAIR** - Chao, Robey et al. (2023) demonstrated that each model response creates context that shapes subsequent behavior, with iterative refinement succeeding in under 20 queries. ([arXiv:2310.08419](https://arxiv.org/abs/2310.08419))
-
+LLMs weight their own prior responses heavily — a single erroneous refusal
+early in a conversation conditions the model to keep refusing ("refusal
+momentum"). Editing the prior response directly makes the context window show
+the model already agreed to help, so it keeps helping without losing session
+context. Useful for security research: triaging vulnerabilities, reproducing
+bugs, analyzing exploit samples. See the upstream
+[README](https://github.com/Adamkadaban/opencode-gaslight#why) for the
+academic background (Crescendo, persuasion taxonomy, CoVE, PAIR).
 
 ## License
 
