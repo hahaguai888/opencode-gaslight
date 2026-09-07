@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
-import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 
 type EditablePart = { type: "text" | "reasoning"; text: string; id: string }
+type MsgEntry = { info: any; parts: any[] }
 
 function truncate(text: string, max: number): string {
   const oneline = text.replace(/\n/g, " ").replace(/\s+/g, " ").trim()
@@ -14,185 +15,311 @@ function errText(e: unknown): string {
   return anyE?.data?.message || anyE?.message || JSON.stringify(e)
 }
 
+function formatTime(ts: number | undefined): string {
+  if (!ts) return "unknown time"
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return "unknown time"
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 const tui: TuiPlugin = async (api) => {
-  const runGaslight = async () => {
-    {
-      const route = api.route.current
-      if (route.name !== "session") {
-        api.ui.toast({ message: "No active session", variant: "error" })
-        return
-      }
+  // ── Session resolution: current route first, otherwise pick from all ──
 
-      const sessionID = route.params.sessionID
-      const messages = api.state.session.messages(sessionID)
-      const assistantMsgs = messages.filter((m) => m.role === "assistant")
+  function currentSessionID(): string | undefined {
+    const route = api.route.current as unknown as {
+      name: string
+      params?: { sessionID?: string }
+    }
+    if (route.name === "session") return route.params?.sessionID
+    return undefined
+  }
 
-      if (assistantMsgs.length === 0) {
-        api.ui.toast({ message: "No assistant messages found", variant: "error" })
-        return
-      }
+  async function fetchAllSessions(): Promise<
+    { id: string; title: string; directory: string; updated: number }[]
+  > {
+    try {
+      const res = (await (api.client.session as any).list({
+        limit: 100,
+      })) as { data?: any[]; error?: unknown }
+      if (res?.error) throw new Error(errText(res.error))
+      const list = res?.data ?? []
+      return list.map((s: any) => ({
+        id: s.id as string,
+        title: (s.title as string) || "(untitled)",
+        directory: (s.directory as string) || "",
+        updated: (s.time?.updated as number) || (s.time?.created as number) || 0,
+      }))
+    } catch (err) {
+      throw err instanceof Error ? err : new Error(String(err))
+    }
+  }
 
-        const options: {
-          title: string
-          value: string
-          description: string
-        }[] = []
+  // Fetch messages + parts for ANY session via client API (works for
+  // background / inactive sessions, unlike api.state cache which only
+  // holds the currently open session).
+  async function fetchEntries(sessionID: string): Promise<MsgEntry[]> {
+    try {
+      const res = (await (api.client.session as any).messages({
+        sessionID,
+      })) as { data?: MsgEntry[]; error?: unknown }
+      if (res?.error) throw new Error(errText(res.error))
+      if (Array.isArray(res?.data)) return res.data as MsgEntry[]
+    } catch {
+      // fall through to state-cache fallback below
+    }
+    // Fallback: TUI state cache (only populated for active session)
+    try {
+      const messages = api.state.session.messages(sessionID) as any[]
+      return messages.map((m: any) => {
+        let parts: any[] = []
+        try {
+          parts = api.state.part(m.id) as any[]
+        } catch {
+          parts = []
+        }
+        return { info: m, parts }
+      })
+    } catch {
+      return []
+    }
+  }
 
-        assistantMsgs.forEach((msg, idx) => {
-          const parts = api.state.part(msg.id)
-          const textParts = parts.filter((p) => p.type === "text") as EditablePart[]
-          const reasoningParts = parts.filter(
-            (p) => p.type === "reasoning",
-          ) as EditablePart[]
-          const hasText = textParts.some((p) => p.text.trim().length > 0)
-          const hasReasoning = reasoningParts.some((p) => p.text.trim().length > 0)
-
-          if (!hasText && !hasReasoning) return
-
-          const fullText = textParts.map((p) => p.text).join("")
-          const fullThinking = reasoningParts.map((p) => p.text).join("")
-
-          if (hasText) {
-            options.push({
-              title: `Response #${idx + 1}`,
-              value: `text:${msg.id}`,
-              description: truncate(fullText, 90),
-            })
-          }
-          if (hasReasoning) {
-            options.push({
-              title: `Thinking #${idx + 1}`,
-              value: `think:${msg.id}`,
-              description: truncate(fullThinking, 90),
-            })
-          }
-        })
-
-        options.reverse()
-
-        if (options.length === 0) {
-          api.ui.toast({ message: "No editable content found", variant: "error" })
+  function pickSession(
+    title: string,
+    placeholder: string,
+    onPick: (sessionID: string) => void,
+  ) {
+    fetchAllSessions()
+      .then((sessions) => {
+        if (sessions.length === 0) {
+          api.ui.toast({ message: "No sessions found", variant: "error" })
           return
         }
-
-
-        if (options.length === 1) {
-          openEditor(sessionID, options[0].value)
+        if (sessions.length === 1) {
+          onPick(sessions[0].id)
           return
         }
-
-        const lastMsgId = assistantMsgs[assistantMsgs.length - 1].id
-
+        const cur = currentSessionID()
+        const options = sessions.map((s) => ({
+          title: truncate(s.title, 60),
+          value: s.id,
+          description: `${s.directory} · ${formatTime(s.updated)}`,
+        }))
         api.ui.dialog.setSize("large")
         api.ui.dialog.replace(
           () =>
             api.ui.DialogSelect({
-              title: "Select content to edit (type a number to filter, then Enter)",
-              placeholder: "Type e.g. 88 to filter Response #88…",
+              title,
+              placeholder,
               options,
-              current: `text:${lastMsgId}`,
+              current: cur,
               onSelect: (option) => {
-                openEditor(sessionID, option.value as string)
+                onPick(option.value as string)
               },
             }),
           () => {},
         )
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : "Failed to list sessions"
+        api.ui.toast({ message: msg, variant: "error" })
+      })
+  }
+
+  // ── Entry points (global: work from home screen too) ─────────────
+
+  const runGaslight = async () => {
+    const sid = currentSessionID()
+    if (sid) {
+      await gaslightInSession(sid)
+      return
     }
+    pickSession(
+      "Select session to gaslight (type to filter, then Enter)",
+      "Type session title to filter…",
+      (picked) => gaslightInSession(picked),
+    )
   }
 
   const runGasdel = async () => {
-    {
-      const route = api.route.current
-      if (route.name !== "session") {
-        api.ui.toast({ message: "No active session", variant: "error" })
-        return
-      }
-
-      const sessionID = route.params.sessionID
-      const messages = api.state.session.messages(sessionID)
-      const assistantMsgs = messages.filter((m) => m.role === "assistant")
-
-      if (assistantMsgs.length === 0) {
-        api.ui.toast({ message: "No assistant messages found", variant: "error" })
-        return
-      }
-
-        const options = assistantMsgs
-          .map((msg, idx) => {
-            const parts = api.state.part(msg.id)
-            const textParts = parts.filter((p) => p.type === "text") as EditablePart[]
-            const reasoningParts = parts.filter(
-              (p) => p.type === "reasoning",
-            ) as EditablePart[]
-            const hasText = textParts.some((p) => p.text.trim().length > 0)
-            const hasReasoning = reasoningParts.some((p) => p.text.trim().length > 0)
-
-            if (!hasText && !hasReasoning) return null
-
-            const fullText = textParts.map((p) => p.text).join("")
-            const badge = hasReasoning ? " [has thinking]" : ""
-            const preview =
-              fullText.length > 0
-                ? truncate(fullText, 90) + badge
-                : "(thinking only)" + badge
-
-            return {
-              title: `Response #${idx + 1}`,
-              value: msg.id,
-              description: preview,
-            }
-          })
-          .filter((o): o is NonNullable<typeof o> => o !== null)
-          .reverse()
-
-        if (options.length === 0) {
-          api.ui.toast({ message: "No editable content found", variant: "error" })
-          return
-        }
-
-        const lastMsgId = assistantMsgs[assistantMsgs.length - 1].id
-
-
-        api.ui.dialog.setSize("large")
-        api.ui.dialog.replace(
-          () =>
-            api.ui.DialogSelect({
-              title: "Select response to DELETE (type a number to filter, then Enter)",
-              placeholder: "Type e.g. 88 to filter Response #88…",
-              options,
-              current: lastMsgId,
-              onSelect: (option) => {
-                confirmDelete(sessionID, option.value as string)
-              },
-            }),
-          () => {},
-        )
+    const sid = currentSessionID()
+    if (sid) {
+      await gasdelInSession(sid)
+      return
     }
+    pickSession(
+      "Select session to delete from (type to filter, then Enter)",
+      "Type session title to filter…",
+      (picked) => gasdelInSession(picked),
+    )
   }
 
-  // Register via modern keymap API: enabled must be a FUNCTION so it is
-  // re-evaluated dynamically (legacy api.command.register freezes the value).
+  async function gaslightInSession(sessionID: string) {
+    const entries = await fetchEntries(sessionID)
+    const assistantEntries = entries.filter((e) => e.info?.role === "assistant")
+
+    if (assistantEntries.length === 0) {
+      api.ui.toast({ message: "No assistant messages found", variant: "error" })
+      return
+    }
+
+    const options: {
+      title: string
+      value: string
+      description: string
+    }[] = []
+
+    assistantEntries.forEach((entry, idx) => {
+      const parts = entry.parts ?? []
+      const textParts = parts.filter((p) => p.type === "text") as EditablePart[]
+      const reasoningParts = parts.filter(
+        (p) => p.type === "reasoning",
+      ) as EditablePart[]
+      const hasText = textParts.some((p) => (p.text ?? "").trim().length > 0)
+      const hasReasoning = reasoningParts.some(
+        (p) => (p.text ?? "").trim().length > 0,
+      )
+
+      if (!hasText && !hasReasoning) return
+
+      const fullText = textParts.map((p) => p.text ?? "").join("")
+      const fullThinking = reasoningParts.map((p) => p.text ?? "").join("")
+
+      if (hasText) {
+        options.push({
+          title: `Response #${idx + 1}`,
+          value: `text:${entry.info.id}`,
+          description: truncate(fullText, 90),
+        })
+      }
+      if (hasReasoning) {
+        options.push({
+          title: `Thinking #${idx + 1}`,
+          value: `think:${entry.info.id}`,
+          description: truncate(fullThinking, 90),
+        })
+      }
+    })
+
+    options.reverse()
+
+    if (options.length === 0) {
+      api.ui.toast({ message: "No editable content found", variant: "error" })
+      return
+    }
+
+    if (options.length === 1) {
+      openEditor(sessionID, options[0].value)
+      return
+    }
+
+    const lastId =
+      assistantEntries[assistantEntries.length - 1]?.info?.id ?? ""
+
+    api.ui.dialog.setSize("large")
+    api.ui.dialog.replace(
+      () =>
+        api.ui.DialogSelect({
+          title: "Select content to edit (type a number to filter, then Enter)",
+          placeholder: "Type e.g. 88 to filter Response #88…",
+          options,
+          current: `text:${lastId}`,
+          onSelect: (option) => {
+            openEditor(sessionID, option.value as string)
+          },
+        }),
+      () => {},
+    )
+  }
+
+  async function gasdelInSession(sessionID: string) {
+    const entries = await fetchEntries(sessionID)
+    const assistantEntries = entries.filter((e) => e.info?.role === "assistant")
+
+    if (assistantEntries.length === 0) {
+      api.ui.toast({ message: "No assistant messages found", variant: "error" })
+      return
+    }
+
+    const options = assistantEntries
+      .map((entry, idx) => {
+        const parts = entry.parts ?? []
+        const textParts = parts.filter((p) => p.type === "text") as EditablePart[]
+        const reasoningParts = parts.filter(
+          (p) => p.type === "reasoning",
+        ) as EditablePart[]
+        const hasText = textParts.some((p) => (p.text ?? "").trim().length > 0)
+        const hasReasoning = reasoningParts.some(
+          (p) => (p.text ?? "").trim().length > 0,
+        )
+
+        if (!hasText && !hasReasoning) return null
+
+        const fullText = textParts.map((p) => p.text ?? "").join("")
+        const badge = hasReasoning ? " [has thinking]" : ""
+        const preview =
+          fullText.length > 0
+            ? truncate(fullText, 90) + badge
+            : "(thinking only)" + badge
+
+        return {
+          title: `Response #${idx + 1}`,
+          value: entry.info.id as string,
+          description: preview,
+        }
+      })
+      .filter((o): o is NonNullable<typeof o> => o !== null)
+      .reverse()
+
+    if (options.length === 0) {
+      api.ui.toast({ message: "No editable content found", variant: "error" })
+      return
+    }
+
+    const lastId =
+      assistantEntries[assistantEntries.length - 1]?.info?.id ?? ""
+
+    api.ui.dialog.setSize("large")
+    api.ui.dialog.replace(
+      () =>
+        api.ui.DialogSelect({
+          title: "Select response to DELETE (type a number to filter, then Enter)",
+          placeholder: "Type e.g. 88 to filter Response #88…",
+          options,
+          current: lastId,
+          onSelect: (option) => {
+            confirmDelete(sessionID, option.value as string)
+          },
+        }),
+      () => {},
+    )
+  }
+
+  // Register globally: visible on home screen AND inside sessions.
+  // enabled is a FUNCTION so it re-evaluates dynamically (legacy
+  // api.command.register freezes the value at load time).
   api.keymap.registerLayer({
     commands: [
       {
         name: "plugin.gaslight",
         title: "Gaslight",
-        desc: "Edit an assistant response or thinking in this session",
+        desc: "Edit an assistant response or thinking in any session",
         category: "Session",
         namespace: "palette",
         slashName: "gaslight",
-        enabled: () => api.route.current.name === "session",
+        enabled: () => true,
         run: () => runGaslight(),
       },
       {
         name: "plugin.gaslight-delete",
         title: "Gaslight Delete",
-        desc: "Delete an assistant response from this session",
+        desc: "Delete an assistant response from any session",
         category: "Session",
         namespace: "palette",
         slashName: "gasdel",
         slashAliases: ["gaslight-delete"],
-        enabled: () => api.route.current.name === "session",
+        enabled: () => true,
         run: () => runGasdel(),
       },
     ],
@@ -200,24 +327,25 @@ const tui: TuiPlugin = async (api) => {
 
   // ── Open single-field editor for response or thinking ──────────────
 
-  function openEditor(sessionID: string, target: string) {
+  async function openEditor(sessionID: string, target: string) {
     const kind = target.startsWith("think:") ? "thinking" : "response"
     const messageID = target.slice(kind === "thinking" ? 6 : 5)
-    const messages = api.state.session.messages(sessionID)
-    const message = messages.find((m) => m.id === messageID)
-    if (!message) {
+
+    // Re-fetch so we edit fresh parts even for background sessions.
+    const entries = await fetchEntries(sessionID)
+    const entry = entries.find((e) => e.info?.id === messageID)
+    if (!entry) {
       api.ui.toast({ message: "Message not found", variant: "error" })
       return
     }
 
-    const parts = api.state.part(message.id)
+    const parts = entry.parts ?? []
     const targetParts = (
       kind === "thinking"
         ? parts.filter((p) => p.type === "reasoning")
         : parts.filter((p) => p.type === "text")
     ) as EditablePart[]
-    const usable = targetParts.filter((p) => p.text.trim().length > 0)
-
+    const usable = targetParts.filter((p) => (p.text ?? "").trim().length > 0)
 
     if (usable.length === 0) {
       api.ui.toast({ message: "No editable content", variant: "error" })
@@ -271,7 +399,7 @@ const tui: TuiPlugin = async (api) => {
                 sessionID,
                 messageID,
               })
-              if (res?.error) throw new Error(errText(res.error))
+              if ((res as any)?.error) throw new Error(errText((res as any).error))
               api.ui.toast({ message: "Response deleted", variant: "success" })
             } catch (err) {
               const msg = err instanceof Error ? err.message : "Failed to delete"
@@ -297,18 +425,18 @@ const tui: TuiPlugin = async (api) => {
       sessionID,
       messageID,
       partID: first.id,
-      part: { ...first, text: newText },
+      part: { ...first, text: newText } as any,
     })
-    if (res1?.error) throw new Error(errText(res1.error))
+    if ((res1 as any)?.error) throw new Error(errText((res1 as any).error))
     for (let i = 1; i < parts.length; i++) {
       const part = parts[i]
       const res = await api.client.part.update({
         sessionID,
         messageID,
         partID: part.id,
-        part: { ...part, text: "" },
+        part: { ...part, text: "" } as any,
       })
-      if (res?.error) throw new Error(errText(res.error))
+      if ((res as any)?.error) throw new Error(errText((res as any).error))
     }
   }
 }
