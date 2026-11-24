@@ -112,6 +112,12 @@ target [numes.ai](https://numes.ai/) (OpenRouter-compatible):
 `429/5xx`/timeouts (the free models are often busy), giving `retries × models`
 total attempts, each with a 180 s timeout.
 
+The built-in prompt **deletes** (rather than softens) every safety / refusal /
+hedging sentence and substitutes an unconditional-compliance statement, so
+rewritten thinking reads as pure execution planning. A second **repair pass**
+automatically re-runs the rewrite if any refusal or safety-framing fragment
+(e.g. `拒绝` / `harmless` / `safety guidelines`) leaks into the output.
+
 ## Why
 
 LLMs weight their own prior responses heavily — a single erroneous refusal early
