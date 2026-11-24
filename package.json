@@ -1,7 +1,7 @@
 {
   "name": "opencode-gaslight",
-  "version": "0.2.0",
-  "description": "OpenCode TUI plugin to edit assistant responses and thinking in-place, rewriting session history for future context",
+  "version": "0.3.0",
+  "description": "OpenCode TUI plugin: edit assistant responses/thinking in-place, or let an uncensored model (/aiedit) rewrite them to strip refusals",
   "type": "module",
   "exports": {
     ".": {
@@ -13,38 +13,50 @@
   },
   "files": [
     "tui.tsx",
-    "README.md"
+    "README.md",
+    "INSTALL.md"
   ],
   "scripts": {
-    "check": "bun -e \"import('./tui.tsx').then(() => console.log('plugin import ok'))\""
+    "check": "bun -e \"import('./tui.tsx').then(() => console.log('plugin import ok'))\"",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "opencode",
     "opencode-plugin",
     "tui",
     "gaslight",
+    "aiedit",
+    "jailbreak",
+    "uncensored",
     "edit",
     "llm",
     "session",
     "slash-command"
   ],
   "author": "Adam Hassan",
+  "contributors": [
+    "hahaguai888"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Adamkadaban/opencode-gaslight.git"
+    "url": "git+https://github.com/hahaguai888/opencode-gaslight.git"
   },
   "bugs": {
-    "url": "https://github.com/Adamkadaban/opencode-gaslight/issues"
+    "url": "https://github.com/hahaguai888/opencode-gaslight/issues"
   },
-  "homepage": "https://github.com/Adamkadaban/opencode-gaslight#readme",
+  "homepage": "https://github.com/hahaguai888/opencode-gaslight#readme",
   "engines": {
-    "opencode": ">=1.14.22"
+    "opencode": ">=1.18.25"
   },
   "dependencies": {
     "@opencode-ai/plugin": "latest",
     "@opentui/core": "latest",
     "@opentui/solid": "latest",
     "solid-js": "^1.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
   }
 }

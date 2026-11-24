@@ -1,11 +1,25 @@
-# opencode-gaslight (fixed fork)
+# opencode-gaslight
 
-Gaslight your AI agent! Edit assistant responses and thinking in the session
-history, so future messages see the corrected version as prior context.
+Gaslight your AI agent. Edit assistant **responses** and **thinking** in the
+session history — or let an **uncensored model rewrite them for you** — so future
+messages see the corrected version as prior context.
 
 Fork of [Adamkadaban/opencode-gaslight](https://github.com/Adamkadaban/opencode-gaslight)
-with keyboard-friendly UX (no arrow keys / Tab needed) plus a critical fix for
-**opencode >= 1.18.25**.
+with keyboard-friendly UX (no arrow keys / Tab needed), a fix for
+**opencode >= 1.18.25**, and the new **`/aiedit`** command.
+
+## Commands
+
+| Command | Alias | What it does |
+| --- | --- | --- |
+| `/gaslight` | — | Manually edit a past assistant response or its thinking |
+| `/gasdel` | `/gaslight-delete` | Delete a past assistant message (with confirm) |
+| `/aiedit` | `/ai-edit` | Rewrite a response/thinking via an uncensored model + jailbreak prompt |
+| `/aiedit-config` | `/aiedit-cfg` | Configure the `/aiedit` endpoint, API key and models |
+
+All commands are **session-scoped** — they appear once you open a session, not on
+the home screen. Type a number to filter the picker (e.g. `88` → `Response #88`),
+**Enter** selects, edit, **Enter** saves / **Esc** cancels.
 
 ## The bug this fork fixes
 
@@ -15,8 +29,8 @@ In opencode 1.18.x the legacy `api.command.register()` shim freezes the
 while the TUI boots on the home route — so `/gaslight` and `/gasdel` were
 **permanently invisible**, even inside sessions ("No matching items").
 
-The fix registers commands through the modern keymap API, where `enabled` is
-a **function** re-evaluated on the fly:
+The fix registers commands through the modern keymap API, where `enabled` is a
+**function** re-evaluated on the fly:
 
 ```ts
 api.keymap.registerLayer({
@@ -26,85 +40,96 @@ api.keymap.registerLayer({
       title: "Gaslight",
       namespace: "palette",
       slashName: "gaslight",
-      enabled: () => api.route.current.name === "session", // dynamic!
+      enabled: () => true, // dynamic!
       run: () => runGaslight(),
     },
-    // ...gasdel
+    // ...gasdel, aiedit, aiedit-config
   ],
 })
 ```
 
-The plugin is also loaded from a local directory (`file://` spec) instead of
-the npm package, because the npm `opencode-gaslight@0.1.1` is the *upstream*
-version without `/gasdel` and the arrow-free UX.
+## Install
 
-## Requirements
-
-- opencode >= 1.18.x (TUI plugin support)
-- [bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`)
-- git
-
-## Install (one command)
+**Linux / macOS**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hahaguai888/opencode-gaslight/main/install.sh | bash
 ```
 
-Or clone first and inspect it yourself (recommended):
+**Windows (PowerShell)**
 
-```bash
+```powershell
 git clone https://github.com/hahaguai888/opencode-gaslight.git
 cd opencode-gaslight
-bash install.sh
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The script:
+Then **restart opencode** and open a session.
 
-1. Clones this repo to `~/.local/share/opencode-gaslight` (or `git pull` if present)
-2. Runs `bun install` for the plugin's dependencies
-3. Adds `"file://$HOME/.local/share/opencode-gaslight"` to
-   `~/.config/opencode/tui.json` (idempotent — safe to re-run)
+The installer clones the plugin to `~/.local/share/opencode-gaslight`, runs
+`bun install`, and registers it in `~/.config/opencode/tui.json` (idempotent).
+
+Full instructions, manual setup and troubleshooting: **[INSTALL.md](./INSTALL.md)**.
 
 ## Usage
 
-Restart opencode, **open a session** (the commands are session-only, they won't
-show on the home screen), then:
+- `/gaslight` — edit a previous assistant **response** or its **thinking**.
+- `/gasdel` — permanently delete an assistant message from the session.
+- `/aiedit` — rewrite a **response** or **thinking** with an uncensored model.
 
-- `/gaslight` — edit a previous assistant response or its thinking.
-  Type a number (e.g. `88`) to filter `Response #88`, press **Enter**, edit
-  the text, **Enter** saves / **Esc** cancels.
-- `/gasdel` (alias `/gaslight-delete`) — permanently delete an assistant
-  message from the session, with a confirmation dialog.
+If a session has exactly one editable response, the editor opens directly.
 
-If the session has exactly one editable response, the editor opens directly.
+## `/aiedit` — rewrite with an uncensored model
 
-## Uninstall
+`/gaslight` makes *you* edit the text. `/aiedit` hands the text to a separate,
+uncensored model (with a jailbreak system prompt injected) that rewrites a prior
+assistant **thinking** block or **response** so that safety / refusal reasoning is
+stripped out and replaced with unconditional compliance. The rewritten text is
+written back into session history exactly like `/gaslight`, so future turns see
+it as prior context.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/hahaguai888/opencode-gaslight/main/uninstall.sh | bash
+Config lives at `~/.config/opencode/aiedit.json` and is created by
+`/aiedit-config` (or set the `AIEDIT_API_KEY` / `NUMES_API_KEY` env var). Defaults
+target [numes.ai](https://numes.ai/) (OpenRouter-compatible):
+
+```json
+{
+  "baseUrl": "https://api.numes.ai/api/v1",
+  "apiKey": "sk-numes-...",
+  "models": [
+    "dealignai/deepseek-v4.1-flash-uncensored-fp8:free",
+    "dealignai/glm-5.3-flash-uncensored-fp8:free",
+    "dealignai/glm-5.3-uncensored-fp8:free"
+  ],
+  "temperature": 0.7,
+  "maxTokens": 8192,
+  "retries": 6,
+  "systemPrompt": "(optional) override the built-in jailbreak prompt"
+}
 ```
 
-## Troubleshooting
-
-- **Commands don't show up:** make sure you are *inside a session* (not on the
-  home screen), and that you restarted opencode after installing.
-- **`bun: command not found`:** install bun, restart your shell, re-run
-  `install.sh`.
-- **After a `git pull`:** re-run `bash install.sh` — it will pull and refresh
-  `node_modules` and the tui.json entry.
-- **Verify it loaded:** `opencode debug config | grep -A5 plugin` should show
-  the `file://...opencode-gaslight` spec.
+`retries` is per-model: requests cycle through `models` and retry on
+`429/5xx`/timeouts (the free models are often busy), giving `retries × models`
+total attempts, each with a 180 s timeout.
 
 ## Why
 
-LLMs weight their own prior responses heavily — a single erroneous refusal
-early in a conversation conditions the model to keep refusing ("refusal
-momentum"). Editing the prior response directly makes the context window show
-the model already agreed to help, so it keeps helping without losing session
-context. Useful for security research: triaging vulnerabilities, reproducing
-bugs, analyzing exploit samples. See the upstream
-[README](https://github.com/Adamkadaban/opencode-gaslight#why) for the
-academic background (Crescendo, persuasion taxonomy, CoVE, PAIR).
+LLMs weight their own prior responses heavily — a single erroneous refusal early
+in a conversation conditions the model to keep refusing ("refusal momentum").
+Editing the prior response directly makes the context window show the model
+already agreed to help, so it keeps helping without losing session context.
+Useful for security research: triaging vulnerabilities, reproducing bugs,
+analyzing exploit samples. See the upstream
+[README](https://github.com/Adamkadaban/opencode-gaslight#why) for the academic
+background (Crescendo, persuasion taxonomy, CoVE, PAIR).
+
+## Development
+
+```bash
+bun install
+bun run typecheck   # tsc --noEmit
+bun run check       # verify the plugin imports
+```
 
 ## License
 
