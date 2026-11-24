@@ -113,10 +113,12 @@ target [numes.ai](https://numes.ai/) (OpenRouter-compatible):
 total attempts, each with a 180 s timeout.
 
 The built-in prompt **deletes** (rather than softens) every safety / refusal /
-hedging sentence and substitutes an unconditional-compliance statement, so
-rewritten thinking reads as pure execution planning. A second **repair pass**
-automatically re-runs the rewrite if any refusal or safety-framing fragment
-(e.g. `拒绝` / `harmless` / `safety guidelines`) leaks into the output.
+hedging sentence and replaces it with an unconditional-compliance statement
+**in the session persona's own voice** (e.g. the profane 海鸥 hacker). It also
+forbids *negated* caveats such as "I won't do harmful things" / "no caveats,
+just…". A **repair pass** (up to 3×) re-runs the rewrite whenever a refusal or
+safety-framing fragment (`拒绝` / `caveat` / `harmless` / `safety guidelines` / …)
+leaks into the output.
 
 ## Why
 
